@@ -23,7 +23,7 @@
   #hint{position:fixed;left:0;right:0;top:calc(50% + 130px);text-align:center;padding:0 24px;font-size:14px;line-height:1.5;opacity:.65}
   #msg{position:fixed;left:0;right:0;top:18%;text-align:center;padding:0 24px;color:#ff8a8a;font-size:15px}
   #bar{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);display:none;gap:12px;padding:0 16px}
-  #bar button{flex:1;height:64px;border-radius:16px;border:2px solid #fff;background:rgba(0,0,0,.6);color:#fff;font-size:18px;font-weight:800;letter-spacing:.06em}
+  #bar button{flex:1;height:64px;border-radius:16px;border:2px solid #fff;background:rgba(0,0,0,.6);color:#fff;font-size:15px;font-weight:800;letter-spacing:.06em}
   #bar button:active{background:#fff;color:#000}
   
 </style>
@@ -36,20 +36,20 @@
 <button id="start">START</button>
 <div id="hint">Rest the phone on a stable stand facing the bat.<br>Keep it still. Works offline.</div>
 <div id="msg"></div>
-<div id="top"><button id="dbg">DEBUG</button><button id="reset">RESET</button><button id="test">TEST</button></div>
+<div id="top"><button id="dbg">DEBUG</button><button id="reset">RESET</button><button id="test">TEST</button><button id="clr">CLR</button></div>
 <div id="toast"></div>
 <div id="sens"><span>Sensitivity</span><input id="sl" type="range" min="1" max="9" value="6"></div>
-<div id="bar"><button id="bat">SET BAT</button><button id="replay">▶ REPLAY 3s</button></div>
+<div id="bar"><button id="bat">SET BAT</button><button id="blk">BLOCK ZONE</button><button id="replay">▶ REPLAY</button></div>
 
 <script>
 (()=>{
 const $=id=>document.getElementById(id);
 const cv=$('c'),ctx=cv.getContext('2d'),vid=$('v');
-let TH=30;const EDGE_PX=15,SLOW=.25,CAP=96;
-let cw=0,ch=0,dpr=1,s=1,dx=0,dy=0,pw=0,ph=0,dw=160,dh=0;const F=2;
+let TH=30;const EDGE_PX=15,SLOW=.25,CAP=200;let DT=33,kN=1;
+let cw=0,ch=0,dpr=1,s=1,dx=0,dy=0,pw=0,ph=0,dw=192,dh=0;const F=2;
 let pctx,oc,octx,img,bg,diff,mask,vis,stack,frames,T,EV;
 let wi=0,cnt=0,edgeT=0,ex=0,ey=0,bgOk=false,warm=0,lastP=0,mode='idle',order=[],rs=0;
-let trk=null,batSeg=null,markStep=0,markA=null,debug=false,dbg={},fps=0,fc=0,fT=0,toastT=0;
+let trk=null,batSeg=null,zones=[],markStep=0,markA=null,useRV=false,debug=false,dbg={},fps=0,fc=0,fT=0,toastT=0;
 
 function resize(){dpr=Math.min(devicePixelRatio||1,2);cw=Math.round(innerWidth*dpr);ch=Math.round(innerHeight*dpr);cv.width=cw;cv.height=ch;layout()}
 function layout(){if(!pw)return;s=Math.max(cw/pw,ch/ph);dx=(cw-pw*s)/2;dy=(ch-ph*s)/2}
@@ -58,7 +58,7 @@ function toast(t,ms){$('toast').textContent=t;clearTimeout(toastT);toastT=setTim
 
 function setup(){
   const vw=vid.videoWidth,vh=vid.videoHeight;
-  pw=320;ph=Math.round(pw*vh/vw/2)*2;dh=ph/F;
+  pw=384;ph=Math.round(pw*vh/vw/2)*2;dh=ph/F;
   const p=document.createElement('canvas');p.width=pw;p.height=ph;
   pctx=p.getContext('2d',{willReadFrequently:true});
   oc=document.createElement('canvas');oc.width=pw;oc.height=ph;octx=oc.getContext('2d');
@@ -91,65 +91,61 @@ function process(now){
 }
 
 // ---------- Detection ----------
-function segDist(x,y,a){
-  const vx=a[2]-a[0],vy=a[3]-a[1],l2=vx*vx+vy*vy||1;
-  let t=((x-a[0])*vx+(y-a[1])*vy)/l2;t=t<0?0:t>1?1:t;
-  return Math.hypot(x-(a[0]+t*vx),y-(a[1]+t*vy));
+function segInfo(x,y,a){
+  const vx=a[2]-a[0],vy=a[3]-a[1],l2=vx*vx+vy*vy||1,t=((x-a[0])*vx+(y-a[1])*vy)/l2,c=t<0?0:t>1?1:t;
+  const px=a[0]+c*vx,py=a[1]+c*vy;return {d:Math.hypot(x-px,y-py),t,px,py};
 }
+const inZone=(x,y)=>zones.some(z=>x>=z[0]&&x<=z[2]&&y>=z[1]&&y<=z[3]);
 function detect(now){
+  dbg={blobs:0,ball:null,gap:null};
+  if(!batSeg)return;                       // bat must be marked: no auto guessing
   for(let y=0;y<dh;y++)for(let x=0;x<dw;x++){
     const i=(y*F)*pw+x*F;mask[y*dw+x]=Math.max(diff[i],diff[i+1],diff[i+pw])>TH?1:0;
   }
-  vis.fill(0);const blobs=[];
+  vis.fill(0);const cands=[];let nb=0;
   for(let k=0;k<mask.length;k++){
     if(!mask[k]||vis[k])continue;
-    let sp=0;stack[sp++]=k;vis[k]=1;
-    const b={a:0,sx:0,sy:0,x0:999,x1:0,y0:999,y1:0,px:[]};
+    let sp=0;stack[sp++]=k;vis[k]=1;nb++;
+    const b={a:0,sx:0,sy:0,x0:999,x1:0,y0:999,y1:0};
     while(sp){
       const p=stack[--sp],x=p%dw,y=(p/dw)|0;
-      b.a++;b.sx+=x;b.sy+=y;b.px.push(p);
+      b.a++;b.sx+=x;b.sy+=y;
       if(x<b.x0)b.x0=x;if(x>b.x1)b.x1=x;if(y<b.y0)b.y0=y;if(y>b.y1)b.y1=y;
       for(let oy=-1;oy<=1;oy++)for(let ox=-1;ox<=1;ox++){
         const nx=x+ox,ny=y+oy;if(nx<0||ny<0||nx>=dw||ny>=dh)continue;
         const q=ny*dw+nx;if(mask[q]&&!vis[q]){vis[q]=1;stack[sp++]=q}
       }
     }
-    b.cx=b.sx/b.a;b.cy=b.sy/b.a;blobs.push(b);
+    if(b.a>=2&&b.a<=70&&b.x1-b.x0<=16&&b.y1-b.y0<=16){b.cx=b.sx/b.a;b.cy=b.sy/b.a;cands.push(b)}
   }
-  // bat
-  let bat=null,batD=null;
-  if(batSeg){batD=(x,y)=>segDist(x,y,batSeg)}
-  else{
-    for(const b of blobs)if(b.a>=25&&(!bat||b.a>bat.a))bat=b;
-    if(bat){const st=Math.max(1,(bat.px.length/400)|0);
-      batD=(x,y)=>{let m=1e9;for(let i=0;i<bat.px.length;i+=st){const p=bat.px[i],dd=Math.hypot(p%dw-x,((p/dw)|0)-y);if(dd<m)m=dd}return m}}
-  }
-  dbg={bat,blobs:blobs.length,ball:null,gap:null};
-  if(!batD){trk=null;return}
-  const cands=blobs.filter(b=>b!==bat&&b.a>=2&&b.a<=70&&b.x1-b.x0<=16&&b.y1-b.y0<=16&&(!bat||b.a<bat.a/3));
+  dbg.blobs=nb;
   let ball=null;
   if(trk){
     const px=trk.x+trk.vx,py=trk.y+trk.vy,gate=Math.max(14,Math.hypot(trk.vx,trk.vy)*1.6+8);let bd=gate;
     for(const b of cands){const dd=Math.hypot(b.cx-px,b.cy-py);if(dd<bd){bd=dd;ball=b}}
   }
-  if(!ball){let bd=1e9;for(const b of cands){const dd=batD(b.cx,b.cy);if(dd<bd){bd=dd;ball=b}}}
+  if(!ball){let bd=1e9;for(const b of cands){const dd=segInfo(b.cx,b.cy,batSeg).d;if(dd<bd){bd=dd;ball=b}}}
   let hit=null;
+  const ok=(h)=>{ // contact must be ON the bat and outside block zones (pad / ground)
+    if(!h||h.t<-.08||h.t>1.08||inZone(h.px,h.py))return null;return h;
+  };
   if(ball){
     const m=trk&&trk.miss<=3?trk.miss+1:0;
     const nt={x:ball.cx,y:ball.cy,vx:m?(ball.cx-trk.x)/m:0,vy:m?(ball.cy-trk.y)/m:0,n:m?trk.n+1:1,miss:0,pvx:m?trk.vx:0,pvy:m?trk.vy:0};
-    const gap=(batD(ball.cx,ball.cy)-Math.sqrt(ball.a/Math.PI))*F*s/dpr;
-    nt.gap=gap;trk=nt;dbg.ball=ball;dbg.gap=gap;
-    if(gap<EDGE_PX)hit={x:ball.cx,y:ball.cy};
-    else if(nt.n>=3&&gap<50){           // sudden deflection / speed drop near bat
-      const s0=Math.hypot(nt.pvx,nt.pvy),s1=Math.hypot(nt.vx,nt.vy);
-      if(s0>1.5&&((nt.pvx*nt.vx+nt.pvy*nt.vy)/(s0*s1+1e-6)<.8||s1<s0*.45))hit={x:ball.cx,y:ball.cy};
+    const si=segInfo(ball.cx,ball.cy,batSeg),gap=(si.d-Math.sqrt(ball.a/Math.PI))*F*s/dpr;
+    nt.gap=gap;nt.si=si;trk=nt;dbg.ball=ball;dbg.gap=gap;
+    if(nt.n>=2){
+      const s0=Math.hypot(nt.pvx,nt.pvy)*kN,s1=Math.hypot(nt.vx,nt.vy)*kN;
+      const deflect=s0>1.2&&((nt.pvx*nt.vx+nt.pvy*nt.vy)/(Math.hypot(nt.pvx,nt.pvy)*Math.hypot(nt.vx,nt.vy)+1e-6)<.8||s1<s0*.45);
+      if(gap<EDGE_PX&&(deflect||nt.n>=3))hit=ok(si);          // close + real ball track
+      else if(gap<EDGE_PX*2&&deflect)hit=ok(si);              // clear deflection near bat
     }
-  }else if(trk){                        // ball vanished right next to bat = contact
+  }else if(trk){
     trk.miss++;
-    if(trk.miss===2&&trk.gap<45&&Math.hypot(trk.vx,trk.vy)>1.2)hit={x:trk.x,y:trk.y};
+    if(trk.miss===2&&trk.gap<EDGE_PX*2&&Math.hypot(trk.vx,trk.vy)*kN>1.2)hit=ok(trk.si);
     if(trk.miss>6)trk=null;
   }
-  if(hit&&now-edgeT>1200){edgeT=now;ex=hit.x*F;ey=hit.y*F;if(navigator.vibrate)navigator.vibrate(80)}
+  if(hit&&now-edgeT>1200){edgeT=now;ex=hit.px*F;ey=hit.py*F;if(navigator.vibrate)navigator.vibrate(80)}
 }
 
 // ---------- Drawing ----------
@@ -170,13 +166,13 @@ const G=(v,a)=>dx+v*F*s;const GY=v=>dy+v*F*s;
 function overlay(live){
   if(batSeg){ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=3*dpr;ctx.setLineDash([10*dpr,8*dpr]);
     ctx.beginPath();ctx.moveTo(G(batSeg[0]),GY(batSeg[1]));ctx.lineTo(G(batSeg[2]),GY(batSeg[3]));ctx.stroke();ctx.setLineDash([])}
+  if(debug||markStep>=10){ctx.strokeStyle='rgba(255,70,70,.8)';ctx.lineWidth=2*dpr;for(const z of zones)ctx.strokeRect(G(z[0]),GY(z[1]),(z[2]-z[0])*F*s,(z[3]-z[1])*F*s)}
   if(markA){ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(G(markA[0]),GY(markA[1]),8*dpr,0,7);ctx.fill()}
   if(!debug||!live)return;
   ctx.lineWidth=2*dpr;ctx.font=`${12*dpr}px monospace`;
-  if(dbg.bat){ctx.strokeStyle='#0f0';ctx.strokeRect(G(dbg.bat.x0),GY(dbg.bat.y0),(dbg.bat.x1-dbg.bat.x0)*F*s,(dbg.bat.y1-dbg.bat.y0)*F*s)}
   if(dbg.ball){ctx.strokeStyle='#f44';ctx.beginPath();ctx.arc(G(dbg.ball.cx),GY(dbg.ball.cy),12*dpr,0,7);ctx.stroke();
     ctx.fillStyle='#f44';ctx.fillText('gap '+Math.round(dbg.gap)+'px',G(dbg.ball.cx)+16*dpr,GY(dbg.ball.cy))}
-  ctx.fillStyle='#0f0';ctx.fillText(`fps ${fps}  blobs ${dbg.blobs||0}  TH ${TH}  ${batSeg?'bat:manual':'bat:auto'}`,10*dpr,ch-130*dpr);
+  ctx.fillStyle='#0f0';ctx.fillText(`fps ${fps}  blobs ${dbg.blobs||0}  TH ${TH}  bat:${batSeg?'set':'NOT SET'}  zones:${zones.length}`,10*dpr,ch-130*dpr);
 }
 function draw(et,x,y,ref,live){
   ctx.fillStyle='#000';ctx.fillRect(0,0,cw,ch);if(!pw)return;
@@ -189,10 +185,7 @@ function draw(et,x,y,ref,live){
 function loop(now){
   requestAnimationFrame(loop);
   if(mode==='live'){
-    if(vid.readyState>=2&&now-lastP>=32){
-      lastP=now;process(now);draw(edgeT,ex,ey,now,true);
-      fc++;if(now-fT>1000){fps=fc;fc=0;fT=now;if(!debug)$('tag').textContent='● LIVE '+fps+'fps'}
-    }
+    if(!useRV&&vid.readyState>=2&&now-lastP>=32)frame(now);
   }else if(mode==='replay'){
     const last=order[order.length-1],head=T[order[0]]+(now-rs)*SLOW;
     if(head>T[last]+600){stopReplay();return}
@@ -202,6 +195,12 @@ function loop(now){
     octx.putImageData(img,0,0);draw(EV[i*3],EV[i*3+1],EV[i*3+2],T[i],false);
   }
 }
+function frame(now){
+  DT=Math.max(8,Math.min(100,now-lastP));lastP=now;kN=Math.max(.5,Math.min(2,33.3/DT));
+  process(now);draw(edgeT,ex,ey,now,true);
+  fc++;if(now-fT>1000){fps=fc;fc=0;fT=now;if(!debug)$('tag').textContent='● LIVE '+fps+'fps'}
+}
+function rv(now){vid.requestVideoFrameCallback(rv);if(mode==='live')frame(now)}
 function startReplay(){
   if(mode!=='live'||cnt<10)return;
   const tn=T[(wi-1+CAP)%CAP];order=[];
@@ -209,20 +208,20 @@ function startReplay(){
   if(order.length<5)return;
   mode='replay';rs=performance.now();$('replay').textContent='■ STOP';$('tag').textContent='⏪ REPLAY 0.25×';
 }
-function stopReplay(){mode='live';bgOk=false;warm=8;trk=null;$('replay').textContent='▶ REPLAY 3s';$('tag').textContent='● LIVE';$('edge').style.opacity=0}
+function stopReplay(){mode='live';bgOk=false;warm=8;trk=null;$('replay').textContent='▶ REPLAY';$('tag').textContent='● LIVE';$('edge').style.opacity=0}
 
 // ---------- Camera ----------
 async function start(){
   $('msg').textContent='';
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('msg').textContent='Camera ke liye https:// link chahiye (GitHub Pages / Netlify).';return}
   try{
-    const st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}}});
+    const st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,min:30}}});
     vid.srcObject=st;await vid.play();
     if(!vid.videoWidth)await new Promise(r=>vid.onloadedmetadata=r);
-    setup();bgOk=false;warm=10;mode='live';
+    setup();bgOk=false;warm=10;mode='live';useRV='requestVideoFrameCallback' in vid;if(useRV)vid.requestVideoFrameCallback(rv);
     $('start').style.display='none';$('hint').style.display='none';
     $('bar').style.display='flex';$('top').style.display='flex';$('sens').style.display='flex';$('tag').style.display='block';
-    toast('Tip: SET BAT dabake bat ke 2 sire tap karo = best accuracy',3500);
+    toast('Pehle SET BAT: bat ke 2 sire tap karo',3500);
     setTimeout(()=>{if(!fc&&mode==='live')$('msg').textContent='Camera frames nahi aa rahe. Page reload karke dobara try karo.'},4000);
     if(document.documentElement.requestFullscreen)document.documentElement.requestFullscreen().catch(()=>{});
   }catch(e){$('msg').textContent='Camera error: '+(e.message||e.name)+' — browser settings mein camera Allow karo.'}
@@ -233,14 +232,18 @@ $('reset').onclick=()=>{if(mode==='live'){bgOk=false;warm=10;edgeT=0;trk=null;to
 $('test').onclick=()=>{if(mode==='live'){edgeT=performance.now();ex=pw/2;ey=ph/2}};
 $('dbg').onclick=e=>{debug=!debug;e.target.classList.toggle('on',debug);if(!debug)$('tag').textContent='● LIVE'};
 $('sl').oninput=e=>{TH=60-5*(+e.target.value)};
+$('clr').onclick=()=>{zones=[];markStep=0;markA=null;toast('Block zones clear')};
+$('blk').onclick=()=>{if(mode!=='live')return;markStep=11;markA=null;toast('Pad / zameen ke area ka ek KONA tap karo')};
 $('bat').onclick=()=>{
   if(mode!=='live')return;
-  if(batSeg){batSeg=null;markA=null;markStep=0;$('bat').textContent='SET BAT';toast('Auto bat mode');return}
+  if(batSeg){batSeg=null;markA=null;markStep=0;trk=null;$('bat').textContent='SET BAT';return}
   markStep=1;markA=null;toast('Bat ka HANDLE (upar) tap karo');
 };
 cv.addEventListener('pointerdown',e=>{
   if(!markStep||!pw)return;
   const x=((e.clientX*dpr-dx)/s)/F,y=((e.clientY*dpr-dy)/s)/F;
+  if(markStep===11){markA=[x,y];markStep=12;toast('Ab ulta (opposite) kona tap karo');return}
+  if(markStep===12){zones.push([Math.min(markA[0],x),Math.min(markA[1],y),Math.max(markA[0],x),Math.max(markA[1],y)]);markA=null;markStep=0;toast('Block zone set ✓ ('+zones.length+')',1500);return}
   if(markStep===1){markA=[x,y];markStep=2;toast('Ab bat ke TIP (neeche) tap karo')}
   else{batSeg=[markA[0],markA[1],x,y];markA=null;markStep=0;trk=null;$('bat').textContent='CLEAR BAT';toast('Bat set ✓',1500)}
 });
