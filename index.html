@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Cricket Hot Spot</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+  video{position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+  #edge{position:fixed;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 56px);text-align:center;font-size:clamp(28px,9vw,56px);font-weight:900;letter-spacing:.06em;opacity:0;transition:opacity .15s;text-shadow:0 0 12px #fff,0 0 30px #fff;pointer-events:none}
+  #tag{position:fixed;left:14px;top:calc(env(safe-area-inset-top,0px) + 12px);font-size:14px;font-weight:700;letter-spacing:.12em;opacity:.8;display:none}
+  #start{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:200px;height:200px;border-radius:50%;border:4px solid #fff;background:#000;color:#fff;font-size:34px;font-weight:900;letter-spacing:.1em;box-shadow:0 0 40px rgba(255,255,255,.45)}
+  #start:active{background:#fff;color:#000}
+  #hint{position:fixed;left:0;right:0;top:calc(50% + 130px);text-align:center;padding:0 24px;font-size:14px;line-height:1.5;opacity:.65}
+  #msg{position:fixed;left:0;right:0;top:18%;text-align:center;padding:0 24px;color:#ff8a8a;font-size:15px}
+  #bar{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);display:none;gap:12px;padding:0 16px}
+  #bar button{flex:1;height:64px;border-radius:16px;border:2px solid #fff;background:rgba(0,0,0,.6);color:#fff;font-size:18px;font-weight:800;letter-spacing:.06em}
+  #bar button:active{background:#fff;color:#000}
+  #bar #reset{flex:0 0 28%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<video id="v" playsinline muted autoplay></video>
+<div id="tag">● LIVE</div>
+<div id="edge">EDGE DETECTED</div>
+<button id="start">START</button>
+<div id="hint">Rest the phone on a stable stand facing the bat.<br>Keep it still. Works offline.</div>
+<div id="msg"></div>
+<div id="bar"><button id="replay">▶ REPLAY 3s</button><button id="reset">RESET</button></div>
+
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+const cv=$('c'),ctx=cv.getContext('2d'),vid=$('v');
+const TH=28;            // motion threshold (0-255)
+const EDGE_PX=15;       // contact distance in screen px
+const SLOW=0.25;        // replay speed
+const CAP=96;           // ~3s at 30fps
+let cw=0,ch=0,dpr=1,s=1,dx=0,dy=0;
+let pw=0,ph=0,dw=160,dh=0,F=2;
+let proc,pctx,oc,octx,img,bg,diff,mask,vis,stack,frames,T,EV;
+let wi=0,cnt=0,edgeT=0,ex=0,ey=0,bgOk=false,warm=0,lastP=0,prevBall=null;
+let mode='idle',order=[],rs=0;
+
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2);
+  cw=Math.round(innerWidth*dpr);ch=Math.round(innerHeight*dpr);
+  cv.width=cw;cv.height=ch;layout();
+}
+function layout(){
+  if(!pw)return;
+  s=Math.max(cw/pw,ch/ph);dx=(cw-pw*s)/2;dy=(ch-ph*s)/2;
+}
+addEventListener('resize',resize);resize();
+
+function setup(){
+  const vw=vid.videoWidth,vh=vid.videoHeight;
+  pw=320;ph=Math.round(pw*vh/vw/2)*2;dh=ph/F;
+  proc=document.createElement('canvas');proc.width=pw;proc.height=ph;
+  pctx=proc.getContext('2d',{willReadFrequently:true});
+  oc=document.createElement('canvas');oc.width=pw;oc.height=ph;octx=oc.getContext('2d');
+  img=octx.createImageData(pw,ph);
+  bg=new Float32Array(pw*ph);diff=new Uint8Array(pw*ph);
+  mask=new Uint8Array(dw*dh);vis=new Uint8Array(dw*dh);stack=new Int32Array(dw*dh);
+  frames=Array.from({length:CAP},()=>new Uint8Array(pw*ph));
+  T=new Float64Array(CAP);EV=new Float64Array(CAP*3);
+  layout();
+}
+
+// ---- Motion -> Hot Spot image ----
+function process(now){
+  pctx.drawImage(vid,0,0,pw,ph);
+  const d=pctx.getImageData(0,0,pw,ph).data,od=img.data,g=frames[wi],n=pw*ph;
+  for(let i=0,j=0;i<n;i++,j+=4){
+    const lum=(d[j]*77+d[j+1]*150+d[j+2]*29)>>8;
+    if(!bgOk)bg[i]=lum;
+    const b=bg[i],df=lum>b?lum-b:b-lum;
+    diff[i]=df>255?255:df;
+    const v=df>TH?Math.min(255,(df*3+lum*.35)|0):(lum*.05)|0;
+    g[i]=v;od[j]=od[j+1]=od[j+2]=v;od[j+3]=255;
+    bg[i]=b+(lum-b)*.03;
+  }
+  bgOk=true;
+  if(warm>0)warm--;else detect(now);
+  octx.putImageData(img,0,0);
+  T[wi]=now;EV[wi*3]=edgeT;EV[wi*3+1]=ex;EV[wi*3+2]=ey;
+  wi=(wi+1)%CAP;if(cnt<CAP)cnt++;
+}
+
+// ---- Blob detection: bat = biggest blob, ball = small compact blob ----
+function detect(now){
+  for(let y=0;y<dh;y++)for(let x=0;x<dw;x++)mask[y*dw+x]=diff[(y*F)*pw+x*F]>TH?1:0;
+  vis.fill(0);
+  const blobs=[];
+  for(let k=0;k<mask.length;k++){
+    if(!mask[k]||vis[k])continue;
+    let sp=0;stack[sp++]=k;vis[k]=1;
+    const b={a:0,sx:0,sy:0,px:[]};
+    while(sp){
+      const p=stack[--sp],x=p%dw,y=(p/dw)|0;
+      b.a++;b.sx+=x;b.sy+=y;b.px.push(p);
+      if(x>0&&mask[p-1]&&!vis[p-1]){vis[p-1]=1;stack[sp++]=p-1}
+      if(x<dw-1&&mask[p+1]&&!vis[p+1]){vis[p+1]=1;stack[sp++]=p+1}
+      if(y>0&&mask[p-dw]&&!vis[p-dw]){vis[p-dw]=1;stack[sp++]=p-dw}
+      if(y<dh-1&&mask[p+dw]&&!vis[p+dw]){vis[p+dw]=1;stack[sp++]=p+dw}
+    }
+    b.cx=b.sx/b.a;b.cy=b.sy/b.a;blobs.push(b);
+  }
+  let bat=null;
+  for(const b of blobs)if(b.a>=25&&(!bat||b.a>bat.a))bat=b;
+  if(!bat){prevBall=null;return}
+  const step=Math.max(1,(bat.px.length/400)|0);
+  let best=null;
+  for(const b of blobs){
+    if(b===bat||b.a<2||b.a>45||b.a>bat.a/3)continue;
+    let md=1e9,mx=0,my=0;
+    for(let i=0;i<bat.px.length;i+=step){
+      const p=bat.px[i],x=p%dw,y=(p/dw)|0,dd=Math.hypot(x-b.cx,y-b.cy);
+      if(dd<md){md=dd;mx=x;my=y}
+    }
+    const gap=(md-Math.sqrt(b.a/Math.PI))*F*s/dpr;   // screen CSS px
+    if(!best||gap<best.gap)best={gap,x:(b.cx+mx)/2*F,y:(b.cy+my)/2*F,t:now};
+  }
+  let hit=null;
+  if(best){
+    if(best.gap<EDGE_PX)hit=best;
+    prevBall=best;
+  }else if(prevBall&&now-prevBall.t<100&&prevBall.gap<45){
+    hit=prevBall;prevBall=null;   // ball merged into bat blob = contact
+  }
+  if(hit&&now-edgeT>1200){
+    edgeT=now;ex=hit.x;ey=hit.y;
+    if(navigator.vibrate)navigator.vibrate(80);
+  }
+}
+
+// ---- Drawing ----
+function glow(et,x,y,age){
+  if(!et||age<0||age>1000)return;
+  const a=1-age/1000,cx=dx+x*s,cy=dy+y*s,r=(60+age*.08)*dpr*(1.2);
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+  gr.addColorStop(0,`rgba(255,255,255,${a})`);
+  gr.addColorStop(.25,`rgba(255,255,255,${a*.55})`);
+  gr.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=gr;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();
+  ctx.fillStyle=`rgba(255,255,255,${a})`;ctx.beginPath();ctx.arc(cx,cy,(4+8*a)*dpr,0,7);ctx.fill();
+  ctx.strokeStyle=`rgba(255,255,255,${a})`;ctx.lineWidth=2*dpr;
+  for(let i=0;i<10;i++){
+    const an=i*.628+(et%1),l1=r*.2,l2=r*(.5+.5*((i*7)%3)/2);
+    ctx.beginPath();ctx.moveTo(cx+Math.cos(an)*l1,cy+Math.sin(an)*l1);
+    ctx.lineTo(cx+Math.cos(an)*l2,cy+Math.sin(an)*l2);ctx.stroke();
+  }
+  ctx.restore();
+}
+function draw(et,x,y,ref){
+  ctx.fillStyle='#000';ctx.fillRect(0,0,cw,ch);
+  if(!pw)return;
+  ctx.imageSmoothingEnabled=true;
+  ctx.drawImage(oc,dx,dy,pw*s,ph*s);
+  const age=ref-et;
+  glow(et,x,y,age);
+  $('edge').style.opacity=(et&&age>=0&&age<1500)?1:0;
+}
+
+// ---- Main loop ----
+function loop(now){
+  requestAnimationFrame(loop);
+  if(mode==='live'){
+    if(vid.readyState>=2&&now-lastP>=32){lastP=now;process(now);draw(edgeT,ex,ey,now)}
+  }else if(mode==='replay'){
+    const last=order[order.length-1],ph0=T[order[0]]+(now-rs)*SLOW;
+    if(ph0>T[last]+600){stopReplay();return}
+    let k=0;while(k+1<order.length&&T[order[k+1]]<=ph0)k++;
+    const i=order[k],g=frames[i],od=img.data;
+    for(let p=0,j=0;p<g.length;p++,j+=4){od[j]=od[j+1]=od[j+2]=g[p];od[j+3]=255}
+    octx.putImageData(img,0,0);
+    draw(EV[i*3],EV[i*3+1],EV[i*3+2],T[i]);
+  }
+}
+function startReplay(){
+  if(mode!=='live'||cnt<10)return;
+  const newest=(wi-1+CAP)%CAP,tn=T[newest];order=[];
+  for(let k=cnt;k>=1;k--){const i=(wi-k+CAP)%CAP;if(T[i]>=tn-3000)order.push(i)}
+  if(order.length<5)return;
+  mode='replay';rs=performance.now();
+  $('replay').textContent='■ STOP';$('tag').textContent='⏪ REPLAY 0.25×';
+}
+function stopReplay(){
+  mode='live';bgOk=false;warm=8;
+  $('replay').textContent='▶ REPLAY 3s';$('tag').textContent='● LIVE';
+  $('edge').style.opacity=0;
+}
+
+// ---- Camera ----
+async function start(){
+  $('msg').textContent='';
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    $('msg').textContent='Camera needs a secure page (https:// or localhost). Host this file or open it via a local server.';
+    return;
+  }
+  try{
+    const st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}}});
+    vid.srcObject=st;await vid.play();
+    if(!vid.videoWidth)await new Promise(r=>vid.onloadedmetadata=r);
+    setup();bgOk=false;warm=10;mode='live';
+    $('start').style.display='none';$('hint').style.display='none';
+    $('bar').style.display='flex';$('tag').style.display='block';
+    if(document.documentElement.requestFullscreen)document.documentElement.requestFullscreen().catch(()=>{});
+  }catch(e){
+    $('msg').textContent='Camera error: '+(e.message||e.name);
+  }
+}
+$('start').onclick=start;
+$('replay').onclick=()=>mode==='replay'?stopReplay():startReplay();
+$('reset').onclick=()=>{if(mode==='live'){bgOk=false;warm=10;edgeT=0}};
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
