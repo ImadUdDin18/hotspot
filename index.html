@@ -17,7 +17,7 @@
   #sens input{flex:1}
   #toast{position:fixed;left:0;right:0;top:40%;text-align:center;padding:0 24px;font-size:18px;font-weight:700;text-shadow:0 0 8px #000;pointer-events:none}
   #edge{position:fixed;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 56px);text-align:center;font-size:clamp(28px,9vw,56px);font-weight:900;letter-spacing:.06em;opacity:0;transition:opacity .15s;text-shadow:0 0 12px #fff,0 0 30px #fff;pointer-events:none}
-  #tag{position:fixed;left:14px;top:calc(env(safe-area-inset-top,0px) + 12px);font-size:14px;font-weight:700;letter-spacing:.12em;opacity:.8;display:none}
+  #tag{position:fixed;left:14px;top:calc(env(safe-area-inset-top,0px) + 64px);font-size:14px;font-weight:700;letter-spacing:.12em;opacity:.8;display:none}
   #start{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:200px;height:200px;border-radius:50%;border:4px solid #fff;background:#000;color:#fff;font-size:34px;font-weight:900;letter-spacing:.1em;box-shadow:0 0 40px rgba(255,255,255,.45)}
   #start:active{background:#fff;color:#000}
   #hint{position:fixed;left:0;right:0;top:calc(50% + 130px);text-align:center;padding:0 24px;font-size:14px;line-height:1.5;opacity:.65}
@@ -55,11 +55,16 @@ const cv=$('c'),ctx=cv.getContext('2d'),vid=$('v');
 let TH=30;const EDGE_PX=15,CAP=200;let SLOW=.25,DT=33,kN=1,hp=0,lastR=0,paused=false,recording=null,autoRp=false,sndOn=true,edges=0,conf=0,bX=-1,bY=-1,ac=null,trail=[];
 let cw=0,ch=0,dpr=1,s=1,dx=0,dy=0,pw=0,ph=0,dw=192,dh=0;const F=2;
 let pctx,oc,octx,img,bg,diff,mask,vis,stack,frames,T,EV;
-let an=null,aBuf=null,aFloor=.01,aPk=0,aT=0,aUsed=1,aStr=0,nearT=0,nearX=0,nearY=0,vT=0,vX=0,vY=0,det=0;const MN=['SOUND+VIS','SOUND','VISUAL'];
+let fx=null,AP=null,aMax=0,aThr=.03,curK=0;let an=null,aBuf=null,aFloor=.01,aPk=0,aT=0,aUsed=1,aStr=0,nearT=0,nearX=0,nearY=0,vT=0,vX=0,vY=0,det=0;const MN=['SOUND+VIS','SOUND','VISUAL'];
 let wi=0,cnt=0,edgeT=0,ex=0,ey=0,bgOk=false,warm=0,lastP=0,mode='idle',order=[],rs=0;
 let trk=null,batSeg=null,zones=[],markStep=0,markA=null,useRV=false,debug=false,dbg={},fps=0,fc=0,fT=0,toastT=0;
 
-function resize(){dpr=Math.min(devicePixelRatio||1,2);cw=Math.round(innerWidth*dpr);ch=Math.round(innerHeight*dpr);cv.width=cw;cv.height=ch;layout()}
+function resize(){dpr=Math.min(devicePixelRatio||1,2);cw=Math.round(innerWidth*dpr);ch=Math.round(innerHeight*dpr);cv.width=cw;cv.height=ch;mkfx();layout()}
+function mkfx(){ // TV look: vignette + scanlines
+  fx=document.createElement('canvas');fx.width=cw;fx.height=ch;const g=fx.getContext('2d');
+  const r=g.createRadialGradient(cw/2,ch/2,Math.min(cw,ch)*.35,cw/2,ch/2,Math.max(cw,ch)*.75);r.addColorStop(0,'rgba(0,0,0,0)');r.addColorStop(1,'rgba(0,0,0,.65)');
+  g.fillStyle=r;g.fillRect(0,0,cw,ch);g.fillStyle='rgba(0,0,0,.12)';for(let y=0;y<ch;y+=3*dpr)g.fillRect(0,y,cw,dpr);
+}
 function layout(){if(!pw)return;s=Math.max(cw/pw,ch/ph);dx=(cw-pw*s)/2;dy=(ch-ph*s)/2}
 addEventListener('resize',resize);resize();
 function toast(t,ms){$('toast').textContent=t;clearTimeout(toastT);toastT=setTimeout(()=>$('toast').textContent='',ms||2500)}
@@ -74,7 +79,7 @@ function setup(){
   bg=new Float32Array(pw*ph);diff=new Uint8Array(pw*ph);
   mask=new Uint8Array(dw*dh);vis=new Uint8Array(dw*dh);stack=new Int32Array(dw*dh);
   frames=Array.from({length:CAP},()=>new Uint8Array(pw*ph));
-  T=new Float64Array(CAP);EV=new Float64Array(CAP*6);layout();
+  AP=new Float32Array(CAP);T=new Float64Array(CAP);EV=new Float64Array(CAP*6);layout();
 }
 
 // ---------- Frame -> Hot Spot image (with auto-exposure compensation) ----------
@@ -87,14 +92,14 @@ function process(now){
   const off=bgOk?Math.max(-25,Math.min(25,(sl-sb)/n)):0;
   for(let i=0,j=0;i<n;i++,j+=4){
     const l=L[i];if(!bgOk)bg[i]=l;
-    const b=bg[i]+off,df=Math.min(255,Math.abs(l-b)),v=df>TH?Math.min(255,(df*3+l*.35)|0):(l*.04)|0;
-    diff[i]=df;g[i]=v;od[j]=od[j+1]=od[j+2]=v;od[j+3]=255;
+    const b=bg[i]+off,df=Math.min(255,Math.abs(l-b)),v=df>TH?Math.min(255,(df*3+l*.35)|0):(l*.7)|0;
+    diff[i]=df;g[i]=v;od[j]=v*.82;od[j+1]=v*.94;od[j+2]=v;od[j+3]=255;
     bg[i]=b+(l-b)*.04;
   }
   bgOk=true;bX=bY=-1;
   if(warm>0)warm--;else detect(now);
   octx.putImageData(img,0,0);
-  T[wi]=now;EV[wi*6]=edgeT;EV[wi*6+1]=ex;EV[wi*6+2]=ey;EV[wi*6+3]=bX;EV[wi*6+4]=bY;EV[wi*6+5]=conf;
+  T[wi]=now;AP[wi]=aMax;aMax=0;EV[wi*6]=edgeT;EV[wi*6+1]=ex;EV[wi*6+2]=ey;EV[wi*6+3]=bX;EV[wi*6+4]=bY;EV[wi*6+5]=conf;
   wi=(wi+1)%CAP;if(cnt<CAP)cnt++;
 }
 
@@ -107,7 +112,7 @@ function micInit(st){
 function micPoll(){
   if(!an||mode!=='live')return;
   an.getFloatTimeDomainData(aBuf);let pk=0;for(let i=0;i<aBuf.length;i++){const v=Math.abs(aBuf[i]);if(v>pk)pk=v}
-  aPk=pk;const now=performance.now(),thr=Math.max(.015,aFloor*(9.5-.7*(+$('sl').value))),sp=pk>thr;
+  aPk=pk;if(pk>aMax)aMax=pk;const now=performance.now(),thr=Math.max(.015,aFloor*(9.5-.7*(+$('sl').value))),sp=pk>thr;aThr=thr;
   if(sp&&now-aT>500){aT=now;aStr=pk;aUsed=0}
   if(!sp)aFloor=Math.max(.002,aFloor*.99+pk*.01);
 }
@@ -219,15 +224,37 @@ function drawTrail(tr){
     ctx.beginPath();ctx.moveTo(dx+tr[i-1][0]*s,dy+tr[i-1][1]*s);ctx.lineTo(dx+tr[i][0]*s,dy+tr[i][1]*s);ctx.stroke()}
   ctx.restore();
 }
+// ---------- TV graphics: UltraEdge waveform + zoom ----------
+function wave(){
+  const live=mode==='live',n=live?Math.min(cnt,100):order.length;if(n<2)return;
+  const x0=14*dpr,w=cw-28*dpr,y0=96*dpr,h=52*dpr,bw=w/n;
+  ctx.save();ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(x0-6*dpr,y0-20*dpr,w+12*dpr,h+28*dpr);
+  ctx.fillStyle='#fff';ctx.font=`700 ${10*dpr}px sans-serif`;ctx.textAlign='left';ctx.fillText('ULTRAEDGE · SOUND',x0,y0-7*dpr);
+  for(let q=0;q<n;q++){
+    const i=live?(wi-n+q+CAP)%CAP:order[q],a=Math.min(1,Math.sqrt(AP[i]/.25)),bh=Math.max(dpr,a*h);
+    ctx.fillStyle=AP[i]>=aThr?'#fff':'rgba(150,200,255,.5)';ctx.fillRect(x0+q*bw,y0+h/2-bh/2,Math.max(1,bw-1),bh);
+  }
+  if(!live){ctx.fillStyle='rgba(255,60,60,.95)';ctx.fillRect(x0+curK*bw,y0-3*dpr,2*dpr,h+6*dpr)}
+  ctx.restore();
+}
+function magnifier(x,y){
+  const r=78*dpr,mx=cw-r-16*dpr,my=400*dpr,S=64,sx=Math.max(0,Math.min(pw-S,x-S/2)),sy=Math.max(0,Math.min(ph-S,y-S/2));
+  ctx.save();ctx.shadowBlur=0;ctx.beginPath();ctx.arc(mx,my,r,0,7);ctx.clip();ctx.fillStyle='#000';ctx.fillRect(mx-r,my-r,2*r,2*r);
+  ctx.drawImage(oc,sx,sy,S,S,mx-r,my-r,2*r,2*r);
+  const gx=mx-r+(x-sx)/S*2*r,gy=my-r+(y-sy)/S*2*r,g=ctx.createRadialGradient(gx,gy,0,gx,gy,28*dpr);
+  g.addColorStop(0,'rgba(255,255,255,.95)');g.addColorStop(1,'rgba(255,255,255,0)');ctx.globalCompositeOperation='lighter';ctx.fillStyle=g;ctx.fillRect(mx-r,my-r,2*r,2*r);
+  ctx.restore();ctx.save();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3*dpr;ctx.beginPath();ctx.arc(mx,my,r,0,7);ctx.stroke();
+  ctx.fillStyle='#fff';ctx.font=`700 ${11*dpr}px sans-serif`;ctx.textAlign='center';ctx.fillText('ZOOM · HOT SPOT',mx,my+r+16*dpr);ctx.restore();
+}
 function draw(et,x,y,ref,live,cf,tr){
   ctx.fillStyle='#000';ctx.fillRect(0,0,cw,ch);if(!pw)return;
   ctx.drawImage(oc,dx,dy,pw*s,ph*s);
-  drawTrail(tr);glow(et,x,y,ref-et,live);overlay(live);
+  drawTrail(tr);glow(et,x,y,ref-et,live);overlay(live);if(fx)ctx.drawImage(fx,0,0);wave();
   const age=ref-et,fs=Math.min(cw*.085,60*dpr);
   ctx.save();ctx.textAlign='center';ctx.fillStyle='#fff';ctx.shadowColor='#fff';ctx.shadowBlur=22*dpr;
-  if(et&&age>=0&&age<1500){ctx.font=`900 ${fs}px sans-serif`;ctx.fillText('EDGE DETECTED',cw/2,100*dpr);
-    ctx.font=`700 ${fs*.42}px sans-serif`;ctx.fillText((cf||0)+'% confidence',cw/2,100*dpr+fs*.6)}
-  if(!live){ctx.textAlign='left';ctx.shadowBlur=0;ctx.font=`700 ${15*dpr}px sans-serif`;ctx.fillText('HOT SPOT · REPLAY '+SLOW+'×',16*dpr,34*dpr)}
+  if(et&&age>=0&&age<2500){magnifier(x,y);ctx.font=`900 ${fs}px sans-serif`;ctx.fillText('EDGE DETECTED',cw/2,230*dpr);
+    ctx.font=`700 ${fs*.42}px sans-serif`;ctx.fillText('BAT CONTACT · '+(cf||0)+'% confidence',cw/2,230*dpr+fs*.6);ctx.shadowBlur=0;ctx.fillRect(cw*.3,230*dpr+fs*.9,cw*.4*(cf||0)/100,5*dpr)}
+  if(!live){ctx.textAlign='left';ctx.shadowBlur=0;ctx.font=`700 ${15*dpr}px sans-serif`;ctx.fillText('HOT SPOT · REPLAY '+SLOW+'×',16*dpr,178*dpr)}
   ctx.restore();
 }
 function updTag(){if(mode==='live')$('tag').textContent='● LIVE '+fps+'fps · EDGES '+edges}
@@ -257,8 +284,8 @@ function loop(now){
   }
 }
 function showFrame(k){
-  const i=order[k],g=frames[i],od=img.data;
-  for(let p=0,j=0;p<g.length;p++,j+=4){od[j]=od[j+1]=od[j+2]=g[p];od[j+3]=255}
+  curK=k;const i=order[k],g=frames[i],od=img.data;
+  for(let p=0,j=0;p<g.length;p++,j+=4){const q=g[p];od[j]=q*.82;od[j+1]=q*.94;od[j+2]=q;od[j+3]=255}
   octx.putImageData(img,0,0);
   const tr=[];for(let q=Math.max(0,k-14);q<=k;q++){const e=order[q];if(EV[e*6+3]>=0)tr.push([EV[e*6+3],EV[e*6+4]])}
   draw(EV[i*6],EV[i*6+1],EV[i*6+2],T[i],false,EV[i*6+5],tr);
