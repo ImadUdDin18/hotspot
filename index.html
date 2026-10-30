@@ -11,7 +11,7 @@
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
   video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;opacity:.01;z-index:-1;pointer-events:none}
   #top{position:fixed;right:10px;top:calc(env(safe-area-inset-top,0px) + 8px);display:none;gap:8px}
-  #top button{height:38px;padding:0 12px;border-radius:10px;border:1.5px solid #fff;background:rgba(0,0,0,.6);color:#fff;font-size:13px;font-weight:700}
+  #top button{height:38px;padding:0 8px;border-radius:10px;border:1.5px solid #fff;background:rgba(0,0,0,.6);color:#fff;font-size:13px;font-weight:700}
   #top button.on{background:#fff;color:#000}
   #sens{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom,0px) + 96px);display:none;align-items:center;gap:10px;font-size:12px;opacity:.85}
   #sens input{flex:1}
@@ -40,9 +40,9 @@
 <div id="tag">● LIVE</div>
 <div id="edge">EDGE DETECTED</div>
 <button id="start">START</button>
-<div id="hint">Rest the phone on a stable stand facing the bat.<br>Keep it still. Works offline.</div>
+<div id="hint">Rest the phone on a stable stand facing the bat.<br>Keep it still.<br>Mic Allow karna: bat ki awaaz se edge confirm hota hai.</div>
 <div id="msg"></div>
-<div id="top"><button id="dbg">DEBUG</button><button id="reset">RESET</button><button id="test">TEST</button><button id="clr">CLR</button></div>
+<div id="top"><button id="dbg">DEBUG</button><button id="reset">RESET</button><button id="mode">MODE</button><button id="test">TEST</button><button id="clr">CLR</button></div>
 <div id="toast"></div>
 <div id="sens"><span>Sensitivity</span><input id="sl" type="range" min="1" max="9" value="6"><button id="auto">AUTO ▶</button><button id="snd" class="on">🔊</button></div>
 <div id="rc"><div class="r1"><button data-s="0.1">0.1×</button><button data-s="0.25" class="on">0.25×</button><button data-s="0.5">0.5×</button><button id="sv">💾 SAVE CLIP</button></div><div class="r1"><button id="pz">⏸</button><button id="bk">◀</button><button id="fw">▶</button><input id="scrub" type="range" min="0" max="1000" value="0"></div></div>
@@ -55,6 +55,7 @@ const cv=$('c'),ctx=cv.getContext('2d'),vid=$('v');
 let TH=30;const EDGE_PX=15,CAP=200;let SLOW=.25,DT=33,kN=1,hp=0,lastR=0,paused=false,recording=null,autoRp=false,sndOn=true,edges=0,conf=0,bX=-1,bY=-1,ac=null,trail=[];
 let cw=0,ch=0,dpr=1,s=1,dx=0,dy=0,pw=0,ph=0,dw=192,dh=0;const F=2;
 let pctx,oc,octx,img,bg,diff,mask,vis,stack,frames,T,EV;
+let an=null,aBuf=null,aFloor=.01,aPk=0,aT=0,aUsed=1,aStr=0,nearT=0,nearX=0,nearY=0,vT=0,vX=0,vY=0,det=0;const MN=['SOUND+VIS','SOUND','VISUAL'];
 let wi=0,cnt=0,edgeT=0,ex=0,ey=0,bgOk=false,warm=0,lastP=0,mode='idle',order=[],rs=0;
 let trk=null,batSeg=null,zones=[],markStep=0,markA=null,useRV=false,debug=false,dbg={},fps=0,fc=0,fT=0,toastT=0;
 
@@ -95,6 +96,30 @@ function process(now){
   octx.putImageData(img,0,0);
   T[wi]=now;EV[wi*6]=edgeT;EV[wi*6+1]=ex;EV[wi*6+2]=ey;EV[wi*6+3]=bX;EV[wi*6+4]=bY;EV[wi*6+5]=conf;
   wi=(wi+1)%CAP;if(cnt<CAP)cnt++;
+}
+
+// ---------- Audio (snicko): bat-touch ki awaaz ----------
+function micInit(st){
+  if(!st.getAudioTracks().length||!ac){det=2;return}
+  try{const src=ac.createMediaStreamSource(st),hp=ac.createBiquadFilter();hp.type='highpass';hp.frequency.value=2000;
+    an=ac.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=0;aBuf=new Float32Array(1024);src.connect(hp);hp.connect(an)}catch(e){det=2;an=null}
+}
+function micPoll(){
+  if(!an||mode!=='live')return;
+  an.getFloatTimeDomainData(aBuf);let pk=0;for(let i=0;i<aBuf.length;i++){const v=Math.abs(aBuf[i]);if(v>pk)pk=v}
+  aPk=pk;const now=performance.now(),thr=Math.max(.015,aFloor*(9.5-.7*(+$('sl').value))),sp=pk>thr;
+  if(sp&&now-aT>500){aT=now;aStr=pk;aUsed=0}
+  if(!sp)aFloor=Math.max(.002,aFloor*.99+pk*.01);
+}
+setInterval(micPoll,10);
+function decide(now){
+  if(det===2||aUsed||now-aT<30)return;
+  if(now-aT>700||now-edgeT<1200){aUsed=1;return}
+  const c=Math.min(90,50+Math.round(Math.log2(aStr/Math.max(aFloor,.003))*8));
+  const near=Math.abs(nearT-aT)<250,vis=Math.abs(vT-aT)<350;
+  if(near||vis){aUsed=1;fireEdge(now,vis?vX:nearX,vis?vY:nearY,Math.min(99,c+(vis?10:0)));return}
+  if(det===1){aUsed=1;const p=nearT&&Math.abs(nearT-aT)<400?[nearX,nearY]:batSeg?[(batSeg[0]+batSeg[2])*F/2,(batSeg[1]+batSeg[3])*F/2]:[pw/2,ph/2];fireEdge(now,p[0],p[1],Math.min(c,80));return}
+  if(now-aT>300){aUsed=1;toast('Awaaz aayi lekin ball bat ke paas nazar nahi aaya',1800)}
 }
 
 // ---------- Detection ----------
@@ -140,12 +165,12 @@ function detect(now){
     const m=trk&&trk.miss<=3?trk.miss+1:0;
     const nt={x:ball.cx,y:ball.cy,vx:m?(ball.cx-trk.x)/m:0,vy:m?(ball.cy-trk.y)/m:0,n:m?trk.n+1:1,miss:0,pvx:m?trk.vx:0,pvy:m?trk.vy:0};
     const si=segInfo(ball.cx,ball.cy,batSeg),gap=(si.d-Math.sqrt(ball.a/Math.PI))*F*s/dpr;
-    nt.gap=gap;nt.si=si;trk=nt;dbg.ball=ball;dbg.gap=gap;bX=ball.cx*F;bY=ball.cy*F;trail.push([bX,bY]);if(trail.length>14)trail.shift();
+    nt.gap=gap;nt.si=si;trk=nt;if(gap<EDGE_PX*3&&si.t>-.15&&si.t<1.15&&!inZone(si.px,si.py)){nearT=now;nearX=si.px*F;nearY=si.py*F}dbg.ball=ball;dbg.gap=gap;bX=ball.cx*F;bY=ball.cy*F;trail.push([bX,bY]);if(trail.length>14)trail.shift();
     if(nt.n>=2){
       const p0=Math.hypot(nt.pvx,nt.pvy),p1=Math.hypot(nt.vx,nt.vy),s0=p0*kN,s1=p1*kN;
       const cs=(nt.pvx*nt.vx+nt.pvy*nt.vy)/(p0*p1+1e-6),ang=Math.acos(Math.max(-1,Math.min(1,cs)))*57.3;
       const deflect=s0>1.2&&(cs<.8||s1<s0*.45);
-      if((gap<EDGE_PX&&(deflect||nt.n>=3))||(gap<EDGE_PX*2&&deflect)){
+      if((gap<EDGE_PX&&deflect)||(gap<EDGE_PX*2&&deflect)){
         hit=ok(si);
         if(hit){const gs=Math.max(0,1-gap/(EDGE_PX*2)),ds=s0>1.2?Math.max(Math.min(1,ang/45),Math.min(1,Math.max(0,1-s1/s0)/.5)):0,ts=Math.min(1,nt.n/5);
           hitConf=Math.max(30,Math.min(99,Math.round(100*(.4*gs+.4*ds+.2*ts))))}
@@ -156,7 +181,7 @@ function detect(now){
     if(trk.miss===2&&trk.gap<EDGE_PX*2&&Math.hypot(trk.vx,trk.vy)*kN>1.2)hit=ok(trk.si);
     if(trk.miss>6){trk=null;trail=[]}
   }
-  if(hit&&now-edgeT>1200)fireEdge(now,hit.px*F,hit.py*F,hitConf);
+  if(hit&&now-edgeT>1200){if(det===2)fireEdge(now,hit.px*F,hit.py*F,hitConf);else{vT=now;vX=hit.px*F;vY=hit.py*F}}
 }
 
 // ---------- Drawing ----------
@@ -186,7 +211,7 @@ function overlay(live){
   ctx.lineWidth=2*dpr;ctx.font=`${12*dpr}px monospace`;
   if(dbg.ball){ctx.strokeStyle='#f44';ctx.beginPath();ctx.arc(G(dbg.ball.cx),GY(dbg.ball.cy),12*dpr,0,7);ctx.stroke();
     ctx.fillStyle='#f44';ctx.fillText('gap '+Math.round(dbg.gap)+'px',G(dbg.ball.cx)+16*dpr,GY(dbg.ball.cy))}
-  ctx.fillStyle='#0f0';ctx.fillText(`fps ${fps}  blobs ${dbg.blobs||0}  TH ${TH}  bat:${batSeg?'set':'NOT SET'}  zones:${zones.length}`,10*dpr,ch-130*dpr);
+  ctx.fillStyle='#0f0';ctx.fillText(`fps ${fps}  blobs ${dbg.blobs||0}  TH ${TH}  bat:${batSeg?'set':'NOT SET'}  zones:${zones.length}  mic ${aPk.toFixed(3)}/${aFloor.toFixed(3)} ${MN[det]}`,10*dpr,ch-130*dpr);
 }
 function drawTrail(tr){
   if(!tr||tr.length<2)return;ctx.save();ctx.lineCap='round';
@@ -240,7 +265,7 @@ function showFrame(k){
 }
 function frame(now){
   DT=Math.max(8,Math.min(100,now-lastP));lastP=now;kN=Math.max(.5,Math.min(2,33.3/DT));
-  process(now);draw(edgeT,ex,ey,now,true,conf,trail);
+  process(now);decide(now);draw(edgeT,ex,ey,now,true,conf,trail);
   fc++;if(now-fT>1000){fps=fc;fc=0;fT=now;updTag()}
 }
 function rv(now){vid.requestVideoFrameCallback(rv);if(mode==='live')frame(now)}
@@ -258,10 +283,11 @@ async function start(){
   $('msg').textContent='';
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('msg').textContent='Camera ke liye https:// link chahiye (GitHub Pages / Netlify).';return}
   try{
-    const st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,min:30}}});
+    const vcon={facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,min:30}};let st;
+    try{st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:vcon})}catch(e){st=await navigator.mediaDevices.getUserMedia({audio:false,video:vcon})}
     vid.srcObject=st;await vid.play();
     if(!vid.videoWidth)await new Promise(r=>vid.onloadedmetadata=r);
-    try{ac=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}try{navigator.wakeLock&&navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
+    try{ac=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}micInit(st);$('mode').textContent=MN[det];try{navigator.wakeLock&&navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}
     setup();bgOk=false;warm=10;mode='live';useRV='requestVideoFrameCallback' in vid;if(useRV)vid.requestVideoFrameCallback(rv);
     $('start').style.display='none';$('hint').style.display='none';
     $('bar').style.display='flex';$('top').style.display='flex';$('sens').style.display='flex';$('tag').style.display='block';
@@ -299,6 +325,7 @@ $('bk').onclick=()=>stepF(-1);$('fw').onclick=()=>stepF(1);
 $('scrub').oninput=e=>{paused=true;pzUI();hp=e.target.value/1000*(T[order[order.length-1]]-T[order[0]])};
 $('auto').onclick=e=>{autoRp=!autoRp;e.target.classList.toggle('on',autoRp);toast(autoRp?'Auto replay ON':'Auto replay OFF',1200)};
 $('snd').onclick=e=>{sndOn=!sndOn;e.target.classList.toggle('on',sndOn)};
+$('mode').onclick=()=>{det=(det+1)%3;if(!an&&det<2)det=2;$('mode').textContent=MN[det];toast('Mode: '+MN[det],1500)};
 function finishClip(){const r=recording;recording=null;paused=true;pzUI();if(r&&r.state!=='inactive')r.stop()}
 $('sv').onclick=()=>{
   if(mode!=='replay')return;
